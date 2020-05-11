@@ -1,0 +1,117 @@
+************************************************************************
+*              ******************************************              *
+*              *            CITROSUCO S.A.              *              *
+*              *       CONFIDENCIAL E PROPRIETÁRIO      *              *
+*              *      TODOS OS DIREITOS RESERVADOS      *              *
+*              ******************************************              *
+************************************************************************
+* Projeto           :                                                  *
+* Objetivo          : Salvar campo deposito e validar o mesmo          *
+* Analista Funcional: Alberto Jesus                                    *
+* Analista Técnico  : Ronaldo Alves                                    *
+* Data              : 11/05/2020                                       *
+* Transação         :                                                  *
+* Objetos           : N/A                                              *
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+* HISTÓRICO DE MODIFICAÇÕES                                            *
+*----------------------------------------------------------------------*
+* DD/MM/AAAA - Autor       - Projeto/Demanda - Descrição da Alteração  *
+*----------------------------------------------------------------------*
+    DATA:lt_root       TYPE /scmtms/t_tor_root_k,
+         lt_mod        TYPE /bobf/t_frw_modification,
+         ls_mod        TYPE /bobf/s_frw_modification,
+         ls_msg        TYPE symsg,
+         lt_stp        TYPE /scmtms/t_tor_stop_k,
+         lo_change     TYPE REF TO /bobf/if_tra_change,
+         ls_failed_key TYPE /bobf/s_frw_key.
+
+    CONSTANTS:cc_zr41(4) TYPE c VALUE 'ZR41'.
+
+    TRY.
+
+        io_read->retrieve(
+          EXPORTING
+            iv_node                 = is_ctx-node_key
+            it_key                  = it_key
+            iv_fill_data            = abap_true
+          IMPORTING
+            et_data                 = lt_root
+        ).
+
+        io_read->retrieve_by_association(
+          EXPORTING
+            iv_node                 = is_ctx-node_key
+            it_key                  = it_key
+            iv_association          = /scmtms/if_tor_c=>sc_association-root-stop
+            iv_fill_data            = abap_true
+          IMPORTING
+            et_data                 = lt_stp
+        ).
+
+        READ TABLE lt_root INTO DATA(ls_root) INDEX 1.
+        IF sy-subrc = 0.
+
+          CHECK ls_root-tor_type = cc_zr41.
+
+          IF ls_root-zzdep02 <> ls_root-zzdeposito.
+            READ TABLE lt_stp ASSIGNING FIELD-SYMBOL(<fs_stp>) WITH KEY stop_cat = 'O'.
+            IF sy-subrc = 0.
+              <fs_stp>-zzdeposito = ls_root-zzdeposito.
+            ENDIF.
+
+            READ TABLE lt_stp ASSIGNING FIELD-SYMBOL(<fs_stpi>) WITH KEY stop_cat = 'I'.
+            IF sy-subrc = 0.
+              <fs_stpi>-zzdep02 = ls_root-zzdep02.
+            ENDIF.
+
+            APPEND 'ZZDEPOSITO' TO ls_mod-changed_fields.
+            APPEND 'ZZDEP02' TO ls_mod-changed_fields.
+
+            DATA(io_svc_mngr) = /bobf/cl_tra_serv_mgr_factory=>get_service_manager(
+            /scmtms/if_tor_c=>sc_bo_key ).
+
+            LOOP AT lt_stp REFERENCE INTO DATA(ls_stp).
+              ls_mod-node = /scmtms/if_tor_c=>sc_node-stop.
+              ls_mod-key = ls_stp->key.
+              ls_mod-root_key = ls_root-key.
+              ls_mod-data = ls_stp.
+              ls_mod-change_mode = /bobf/if_frw_c=>sc_modify_update.
+              APPEND ls_mod TO lt_mod.
+
+              CALL METHOD io_svc_mngr->modify
+                EXPORTING
+                  it_modification = lt_mod
+                IMPORTING
+                  eo_change       = lo_change
+                  eo_message      = eo_message.
+
+              CLEAR:lt_mod[].
+            ENDLOOP.
+          ELSE.
+
+            ls_msg-msgid = 'YS4TM'.
+            ls_msg-msgno = 002.
+            ls_msg-msgty = /bobf/if_frw_c=>sc_change_failed_only.
+
+            IF eo_message IS INITIAL.
+              eo_message = /bobf/cl_frw_factory=>get_message( ).
+            ENDIF.
+
+            eo_message->add_message(
+               EXPORTING
+                 is_msg       = ls_msg
+                 iv_node      = is_ctx-node_key
+                 iv_key       = ls_root-key
+                 iv_attribute = 'ZZDEPOSITO'
+             ).
+
+            ls_failed_key-key = ls_root-key.
+            APPEND ls_failed_key TO et_failed_key.
+
+          ENDIF.
+        ENDIF.
+
+      CATCH cx_root INTO DATA(o_err).
+        DATA(lv_msg) = o_err->get_text( ).
+    ENDTRY.
